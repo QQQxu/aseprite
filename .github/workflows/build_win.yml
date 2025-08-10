@@ -1,60 +1,92 @@
 name: Build Aseprite for Windows
 
 on:
-  workflow_dispatch:   # 允许手动触发
   push:
-    branches: [ main ] # 只在 main 分支推送时触发
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   build-windows:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        build_type: [RelWithDebInfo]
+        ui: [gui]
+        scripting: [lua]
     timeout-minutes: 30
     
     steps:
-    - name: Checkout code with submodules
+    - name: Checkout code
       uses: actions/checkout@v4
       with:
-        submodules: recursive
-        fetch-depth: 0
+        submodules: 'recursive'
         
-    - name: Download Skia
-      run: ./scripts/skia-download.sh
-      
-    - name: Setup Visual Studio
+    - name: Install Skia
+      shell: bash
+      run: |
+        # 创建Windows兼容的路径
+        this_dir=$(cygpath -w "${{ github.workspace }}")
+        
+        # 获取Skia下载URL
+        skia_url=$(source ./laf/misc/skia-url.sh | xargs)
+        
+        # 下载并解压Skia
+        curl --ssl-revoke-best-effort -L -o skia.zip "$skia_url"
+        unzip skia.zip -d skia
+        
+        # 设置Windows环境变量供CMake使用
+        echo "SKIA_DIR=$this_dir\\skia" >> $GITHUB_ENV
+        echo "SKIA_LIBRARY_DIR=$this_dir\\skia\\out\\Release-x64" >> $GITHUB_ENV
+        
+    - name: Install build tools
+      run: |
+        choco install -y ninja
+        choco install -y cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+        
+    - name: Setup MSVC compiler
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
         
-    - name: Install CMake
-      uses: lukka/get-cmake@latest
-      
-    - name: Install Ninja
-      run: |
-        choco install ninja -y
-        
     - name: Configure CMake
+      shell: cmd
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo `
-              -DCMAKE_INSTALL_PREFIX=dist `
-              -G Ninja `
-              -DLAF_BACKEND=skia `
-              -DENABLE_SCRIPTING=ON `
-              -DENABLE_UI=ON `
-              -DENABLE_TESTS=OFF
+        cmake -S . -B build -G Ninja ^
+          -DCMAKE_BUILD_TYPE=%MATRIX_BUILD_TYPE% ^
+          -DENABLE_TESTS=ON ^
+          -DENABLE_SCRIPTING=ON ^
+          -DLAF_BACKEND=skia ^
+          -DSKIA_DIR=%SKIA_DIR% ^
+          -DSKIA_LIBRARY_DIR=%SKIA_LIBRARY_DIR%
+      env:
+        MATRIX_BUILD_TYPE: ${{ matrix.build_type }}
         
     - name: Build Aseprite
+      shell: cmd
       run: |
-        cmake --build build --config RelWithDebInfo --parallel 2 --target aseprite
+        cmake --build build --config %MATRIX_BUILD_TYPE% --parallel 4
         
     - name: Create portable package
       run: |
-        mkdir aseprite-package
-        copy build\bin\RelWithDebInfo\aseprite.exe aseprite-package
-        copy build\bin\RelWithDebInfo\*.dll aseprite-package
-        xcopy /E /I build\bin\data aseprite-package\data
+        $commitHash = git rev-parse --short HEAD
+        $version = "aseprite-windows-$commitHash"
+        
+        mkdir $version
+        copy build\bin\$env:MATRIX_BUILD_TYPE\aseprite.exe $version
+        copy build\bin\$env:MATRIX_BUILD_TYPE\*.dll $version
+        xcopy /E /I build\bin\data $version\data
+        
+        # 创建版本信息文件
+        echo "Build date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" > $version\build-info.txt
+        echo "Commit: $commitHash" >> $version\build-info.txt
+        echo "Build type: $env:MATRIX_BUILD_TYPE" >> $version\build-info.txt
+        
+        # 压缩为ZIP包
+        Compress-Archive -Path $version -DestinationPath $version.zip
         
     - name: Upload artifact
-      uses: actions/upload-artifact@v4  # 更新为 v4
+      uses: actions/upload-artifact@v4
       with:
-        name: aseprite-windows-portable
-        path: aseprite-package
+        name: aseprite-windows
+        path: $version.zip
