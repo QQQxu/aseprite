@@ -1,4 +1,4 @@
-name: Build Aseprite for Windows
+name: Build Aseprite for Windows (Fixed)
 
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
     - name: Install Skia
       shell: bash
       run: |
-        # 创建Windows兼容的路径
+        # 获取当前工作空间路径（Windows格式）
         this_dir=$(cygpath -w "${{ github.workspace }}")
         
         # 获取Skia下载URL
@@ -62,31 +62,33 @@ jobs:
       env:
         MATRIX_BUILD_TYPE: ${{ matrix.build_type }}
         
-    - name: Build Aseprite
+    - name: Build Aseprite (Fixed)
       shell: cmd
       run: |
-        cmake --build build --config %MATRIX_BUILD_TYPE% --parallel 4
+        # 修复：移除 --config 参数，因为 Ninja 是单配置生成器
+        cmake --build build --parallel 4
         
     - name: Create portable package
       run: |
+        $buildType = "$env:MATRIX_BUILD_TYPE"
         $commitHash = git rev-parse --short HEAD
         $version = "aseprite-windows-$commitHash"
         
         mkdir $version
-        copy build\bin\$env:MATRIX_BUILD_TYPE\aseprite.exe $version
-        copy build\bin\$env:MATRIX_BUILD_TYPE\*.dll $version
-        xcopy /E /I build\bin\data $version\data
+        copy "build\bin\$buildType\aseprite.exe" $version
+        copy "build\bin\$buildType\*.dll" $version
+        xcopy /E /I "build\bin\data" "$version\data"
         
         # 创建版本信息文件
-        echo "Build date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" > $version\build-info.txt
-        echo "Commit: $commitHash" >> $version\build-info.txt
-        echo "Build type: $env:MATRIX_BUILD_TYPE" >> $version\build-info.txt
+        echo "Build date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" > "$version\build-info.txt"
+        echo "Commit: $commitHash" >> "$version\build-info.txt"
+        echo "Build type: $buildType" >> "$version\build-info.txt"
         
         # 压缩为ZIP包
-        Compress-Archive -Path $version -DestinationPath $version.zip
+        Compress-Archive -Path $version -DestinationPath "$version.zip"
         
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: aseprite-windows
-        path: $version.zip
+        path: "$version.zip"
