@@ -54,7 +54,7 @@ jobs:
         xcopy /E /I build\bin\data aseprite-package\data
         
     - name: Upload artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # 更新为 v4
       with:
         name: aseprite-windows-portable
         path: aseprite-package
