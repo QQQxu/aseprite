@@ -1,0 +1,60 @@
+name: Build Aseprite for Windows
+
+on:
+  workflow_dispatch:   # 允许手动触发
+  push:
+    branches: [ main ] # 只在 main 分支推送时触发
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout code with submodules
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+        
+    - name: Download Skia
+      run: ./scripts/skia-download.sh
+      
+    - name: Setup Visual Studio
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+        
+    - name: Install CMake
+      uses: lukka/get-cmake@latest
+      
+    - name: Install Ninja
+      run: |
+        choco install ninja -y
+        
+    - name: Configure CMake
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+              -DCMAKE_INSTALL_PREFIX=dist `
+              -G Ninja `
+              -DLAF_BACKEND=skia `
+              -DENABLE_SCRIPTING=ON `
+              -DENABLE_UI=ON `
+              -DENABLE_TESTS=OFF
+        
+    - name: Build Aseprite
+      run: |
+        cmake --build build --config RelWithDebInfo --parallel 2 --target aseprite
+        
+    - name: Create portable package
+      run: |
+        mkdir aseprite-package
+        copy build\bin\RelWithDebInfo\aseprite.exe aseprite-package
+        copy build\bin\RelWithDebInfo\*.dll aseprite-package
+        xcopy /E /I build\bin\data aseprite-package\data
+        
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: aseprite-windows-portable
+        path: aseprite-package
