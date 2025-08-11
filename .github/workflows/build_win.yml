@@ -8,7 +8,7 @@ jobs:
     name: Build (Windows)
     runs-on: windows-latest
     env:
-      BUILD_TYPE: RelWithDebInfo
+      BUILD_TYPE: Release
       UI_MODE: gui
       SCRIPTING_MODE: lua
 
