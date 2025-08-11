@@ -49,6 +49,9 @@ jobs:
             -DENABLE_SCRIPTING=$enable_scripting \
             -DENABLE_CCACHE=$enable_ccache \
             -DLAF_BACKEND=$laf_backend \
+            -DENABLE_NEWS=OFF \
+            -DENABLE_UPDATER=OFF \
+            -DUSE_SHARED_CURL=OFF \
             -DSKIA_DIR=$(realpath skia) \
             -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch || true)
 
