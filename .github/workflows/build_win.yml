@@ -1,94 +1,77 @@
-name: Build Aseprite for Windows (Fixed)
+name: One-Click Windows PR Build
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch: # 手动触发，PR 页面会显示按钮
 
 jobs:
   build-windows:
+    name: Build (Windows)
     runs-on: windows-latest
-    strategy:
-      matrix:
-        build_type: [RelWithDebInfo]
-        ui: [gui]
-        scripting: [lua]
-    timeout-minutes: 30
-    
+    env:
+      BUILD_TYPE: RelWithDebInfo
+      UI_MODE: gui
+      SCRIPTING_MODE: lua
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: 'recursive'
-        
-    - name: Install Skia
-      shell: bash
-      run: |
-        # 获取当前工作空间路径（Windows格式）
-        this_dir=$(cygpath -w "${{ github.workspace }}")
-        
-        # 获取Skia下载URL
-        skia_url=$(source ./laf/misc/skia-url.sh | xargs)
-        
-        # 下载并解压Skia
-        curl --ssl-revoke-best-effort -L -o skia.zip "$skia_url"
-        unzip skia.zip -d skia
-        
-        # 设置Windows环境变量供CMake使用
-        echo "SKIA_DIR=$this_dir\\skia" >> $GITHUB_ENV
-        echo "SKIA_LIBRARY_DIR=$this_dir\\skia\\out\\Release-x64" >> $GITHUB_ENV
-        
-    - name: Install build tools
-      run: |
-        choco install -y ninja
-        choco install -y cmake --installargs 'ADD_CMAKE_TO_PATH=System'
-        
-    - name: Setup MSVC compiler
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
-        
-    - name: Configure CMake
-      shell: cmd
-      run: |
-        cmake -S . -B build -G Ninja ^
-          -DCMAKE_BUILD_TYPE=%MATRIX_BUILD_TYPE% ^
-          -DENABLE_TESTS=ON ^
-          -DENABLE_SCRIPTING=ON ^
-          -DLAF_BACKEND=skia ^
-          -DSKIA_DIR=%SKIA_DIR% ^
-          -DSKIA_LIBRARY_DIR=%SKIA_LIBRARY_DIR%
-      env:
-        MATRIX_BUILD_TYPE: ${{ matrix.build_type }}
-        
-    - name: Build Aseprite (Fixed)
-      shell: cmd
-      run: |
-        # 修复：移除 --config 参数，因为 Ninja 是单配置生成器
-        cmake --build build --parallel 4
-        
-    - name: Create portable package
-      run: |
-        $buildType = "$env:MATRIX_BUILD_TYPE"
-        $commitHash = git rev-parse --short HEAD
-        $version = "aseprite-windows-$commitHash"
-        
-        mkdir $version
-        copy "build\bin\$buildType\aseprite.exe" $version
-        copy "build\bin\$buildType\*.dll" $version
-        xcopy /E /I "build\bin\data" "$version\data"
-        
-        # 创建版本信息文件
-        echo "Build date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" > "$version\build-info.txt"
-        echo "Commit: $commitHash" >> "$version\build-info.txt"
-        echo "Build type: $buildType" >> "$version\build-info.txt"
-        
-        # 压缩为ZIP包
-        Compress-Archive -Path $version -DestinationPath "$version.zip"
-        
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: aseprite-windows
-        path: "$version.zip"
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+          submodules: 'recursive'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - uses: aseprite/get-ninja@main
+
+      - name: Prepare Skia (if GUI)
+        if: env.UI_MODE == 'gui'
+        shell: bash
+        run: |
+          if [[ -f "${GITHUB_WORKSPACE}/laf/misc/skia-url.sh" ]]; then
+            this_dir=$(cygpath "${GITHUB_WORKSPACE}")
+            skia_url=$(source "$this_dir/laf/misc/skia-url.sh" | xargs)
+            skia_file=$(basename "$skia_url")
+            curl --ssl-revoke-best-effort -L -o "$skia_file" "$skia_url"
+            unzip "$skia_file" -d skia
+          fi
+
+      - name: Generate build files
+        shell: bash
+        run: |
+          enable_ccache=off
+          if [[ "$UI_MODE" == "gui" ]]; then laf_backend=skia; else laf_backend=none; fi
+          if [[ "$SCRIPTING_MODE" == "lua" ]]; then enable_scripting=on; else enable_scripting=off; fi
+          skia_arch=x64
+
+          cmake -S . -B build -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -DENABLE_SCRIPTING=$enable_scripting \
+            -DENABLE_CCACHE=$enable_ccache \
+            -DLAF_BACKEND=$laf_backend \
+            -DSKIA_DIR=$(realpath skia) \
+            -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch || true)
+
+      - name: Compile
+        shell: bash
+        run: cd build && ninja -v
+
+      - name: Package exe into zip
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          PR_NUM="${{ github.event.pull_request.number || 'manual' }}"
+          TS=$(date +'%Y%m%d-%H%M%S')
+          ZIP_NAME="build-pr${PR_NUM}-${TS}.zip"
+
+          # 找出所有 exe 并压缩
+          find build -type f -iname '*.exe' -exec cp {} artifacts/ \;
+          cd artifacts
+          7z a "$ZIP_NAME" *.exe
+          mv "$ZIP_NAME" ../
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-zip
+          path: build-pr*.zip
