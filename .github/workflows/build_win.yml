@@ -1,4 +1,4 @@
-name: One-Click Windows PR Build
+name: Windows Build
 
 on:
   workflow_dispatch: # 手动触发，PR 页面会显示按钮
@@ -49,9 +49,12 @@ jobs:
             -DENABLE_SCRIPTING=$enable_scripting \
             -DENABLE_CCACHE=$enable_ccache \
             -DLAF_BACKEND=$laf_backend \
-            -DENABLE_NEWS=OFF \
             -DENABLE_UPDATER=OFF \
+            -DENABLE_NEWS=OFF \
+            -DENABLE_WEBSOCKET=OFF \
             -DUSE_SHARED_CURL=OFF \
+            -DCMAKE_USE_OPENSSL=OFF \
+            -DCMAKE_USE_SCHANNEL=ON \
             -DSKIA_DIR=$(realpath skia) \
             -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch || true)
 
@@ -59,22 +62,32 @@ jobs:
         shell: bash
         run: cd build && ninja -v
 
-      - name: Package exe into zip
+      - name: Copy Skia DLLs into build/bin (if any)
+        if: env.UI_MODE == 'gui'
         shell: bash
         run: |
-          mkdir -p artifacts
-          PR_NUM="${{ github.event.pull_request.number || 'manual' }}"
-          TS=$(date +'%Y%m%d-%H%M%S')
-          ZIP_NAME="build-pr${PR_NUM}-${TS}.zip"
+          skia_arch=x64
+          if [[ -d "skia/out/Release-$skia_arch" && -d "build/bin" ]]; then
+            find "skia/out/Release-$skia_arch" -maxdepth 1 -type f -iname '*.dll' -exec cp {} build/bin/ \;
+          fi
 
-          # 找出所有 exe 并压缩
-          find build -type f -iname '*.exe' -exec cp {} artifacts/ \;
-          cd artifacts
-          7z a "$ZIP_NAME" *.exe
-          mv "$ZIP_NAME" ../
+      - name: Package build/bin into zip
+        id: package_zip
+        shell: pwsh
+        run: |
+          $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+          $zip = "aseprite-win-$ts.zip"
+          Compress-Archive -Path "${{ github.workspace }}/build/bin/*" -DestinationPath $zip -Force
+          "zip_path=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aseprite
+          path: ${{ github.workspace }}/build/bin
 
       - name: Upload ZIP artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-build-zip
-          path: build-pr*.zip
+          path: ${{ steps.package_zip.outputs.zip_path }}
